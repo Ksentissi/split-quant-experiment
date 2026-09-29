@@ -1,0 +1,12 @@
+method,bits,accuracy_mean,accuracy_std
+uncompressed,,0.8661,0.0
+deterministic,8,0.8661,0.0
+stochastic_R1,8,0.86578,0.00028596814119368543
+deterministic,6,0.8665,0.0
+stochastic_R1,6,0.8655799999999999,0.0003392802839999929
+deterministic,4,0.8653,0.0
+stochastic_R1,4,0.86335,0.0012276897907135132
+deterministic,3,0.8595,0.0
+stochastic_R1,3,0.85964,0.0016587813465178557
+deterministic,2,0.8385,0.0
+stochastic_R1,2,0.8307800000000001,0.0021080796948882235
