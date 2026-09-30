@@ -46,11 +46,18 @@ Outputs land in `results/`:
   images (the full grid is too expensive to run on all 10,000 images with
   10 seeds x 32 replicas; the subset is fixed and identical for every
   method/bit/replica so the comparison stays fair).
-- `bias_variance.csv` — per (bits, R) bias and variance of the stochastic
-  reconstruction, estimated across the 10 seeds.
+- `bias_variance.csv` — per (method, bits, R) bias²/variance decomposition
+  of the reconstruction error (MSE = bias² + variance, verified
+  numerically to ~1e-9), for BOTH methods. Deterministic variance is
+  exactly 0 (no randomness to average out), so its bias² is constant in R;
+  stochastic bias² is ~0 (true bias is exactly 0 by construction) and its
+  variance shrinks as 1/R.
 - `summary_table.csv` — the headline table (bits, replicas, deterministic
-  vs stochastic MSE/accuracy, honest divergence, paired significance test).
-- `plot1..plot5_*.png` — the 5 requested figures.
+  vs stochastic MSE/accuracy/bias²/variance, honest divergence, paired
+  significance test).
+- `plot1..plot6_*.png` — the 6 figures, including `plot6_bias_variance_decomposition_bits{N}.png`,
+  the direct visual proof that deterministic error is 100% (constant) bias
+  while stochastic error is ~100% (shrinking) variance.
 
 ## Reproducibility
 

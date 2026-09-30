@@ -113,12 +113,18 @@ def replica_grid(model, a_sub, y_sub, device, raw_csv, biasvar_csv):
     The full (bits x replicas x seeds) grid on the fixed subset, producing:
       - raw_csv: one row per (method, bits, R, seed) with mse/rel_err/
         divergence/accuracy averaged over the subset images.
-      - biasvar_csv: one row per (bits, R) with bias and variance of the
-        stochastic reconstruction a_bar_R, estimated across the N_SEEDS
-        independent seeds.
+      - biasvar_csv: one row per (method, bits, R) with the bias^2/variance
+        DECOMPOSITION of the reconstruction error, for BOTH methods, on the
+        exact same per-element-mean scale as `mse` in raw_csv, so that the
+        textbook identity
+            MSE(a, a_bar_R) = bias^2(a_bar_R) + variance(a_bar_R)
+        can be checked numerically (see `mse_check` column) instead of
+        merely assumed. This is the core evidence for the central claim:
+        deterministic quantization's error is (by construction) 100% bias
+        and does not shrink with R, while stochastic quantization's error
+        is (by construction) ~100% variance, which DOES shrink with R.
     """
     N = a_sub.shape[0]
-    D = a_sub[0].numel()
     l, u = compute_range(a_sub)
     raw_rows = []
     biasvar_rows = []
@@ -127,10 +133,17 @@ def replica_grid(model, a_sub, y_sub, device, raw_csv, biasvar_csv):
         # ---------------- Deterministic ----------------
         # Q_d(a) does not depend on the replica index -> a_bar_R is the
         # same for every R. We still generate R_MAX independent calls to
-        # verify experimentally that divergence is ~0 (not just assumed).
+        # verify experimentally (not just assume) that both the
+        # inter-replica divergence AND the variance-across-replicas are
+        # numerically zero: deterministic quantization is a pure function
+        # of `a`, so it has no randomness to average out.
         det_replicas = torch.stack([quantize_deterministic(a_sub, bits, l, u) for _ in range(R_MAX)], dim=0)
         det_flat = det_replicas.flatten(2)  # [R_MAX, N, D]
         det_div_matrix = pairwise_divergence_matrix(det_flat)  # [N, R_MAX, R_MAX]
+        # Variance across the R_MAX (supposedly identical) replicas, on the
+        # same per-element-mean scale as mse_per_image. Should be ~0.
+        det_variance = det_replicas.var(dim=0, unbiased=False).flatten(1).mean(dim=1).mean().item()
+
         for R in R_LIST:
             a_bar = det_replicas[:R].mean(dim=0)
             mse = mse_per_image(a_sub, a_bar).mean().item()
@@ -139,12 +152,26 @@ def replica_grid(model, a_sub, y_sub, device, raw_csv, biasvar_csv):
             acc = accuracy_from_activation(model, a_bar, y_sub, device)
             raw_rows.append({"method": "deterministic", "bits": bits, "R": R, "seed": "",
                               "mse": mse, "rel_error": rel, "divergence": div, "accuracy": acc})
-        print(f"[grid] bits={bits} deterministic done (divergence ~ {det_div_matrix.mean().item():.3e}, should be ~0)")
+            # Deterministic reconstruction has (numerically) zero variance,
+            # so its entire MSE is bias^2 -- and since a_bar_R = Q_d(a) for
+            # EVERY R, this bias^2 is exactly constant in R (never shrinks).
+            biasvar_rows.append({
+                "method": "deterministic", "bits": bits, "R": R,
+                "bias_sq": mse - det_variance, "variance": det_variance,
+                "mse_check": mse, "mse_actual": mse,
+            })
+        print(f"[grid] bits={bits} deterministic done "
+              f"(inter-replica divergence ~ {det_div_matrix.mean().item():.3e}, "
+              f"variance-across-replicas ~ {det_variance:.3e}; both should be ~0)")
 
         # ---------------- Stochastic ----------------
-        # Accumulators (over seeds) for bias/variance of a_bar_R, per R.
+        # Accumulators (over seeds) for the bias^2/variance decomposition
+        # of a_bar_R, per R, all on the per-element-mean scale (matching
+        # mse_per_image) so bias_sq + variance can be checked against the
+        # actual measured MSE.
         sum_abar = {R: torch.zeros_like(a_sub) for R in R_LIST}
-        sumsq_scalar = {R: torch.zeros(N) for R in R_LIST}
+        sumsq_meanscale = {R: torch.zeros(N) for R in R_LIST}
+        mse_accum = {R: [] for R in R_LIST}
 
         for seed in range(N_SEEDS):
             gens = [make_generator(a_sub.device, BASE_SEED + seed, bits, r) for r in range(R_MAX)]
@@ -163,18 +190,27 @@ def replica_grid(model, a_sub, y_sub, device, raw_csv, biasvar_csv):
                 acc = accuracy_from_activation(model, a_bar, y_sub, device)
                 raw_rows.append({"method": "stochastic", "bits": bits, "R": R, "seed": seed,
                                   "mse": mse, "rel_error": rel, "divergence": div, "accuracy": acc})
+                mse_accum[R].append(mse)
 
                 sum_abar[R] += a_bar
-                sumsq_scalar[R] += a_bar.flatten(1).pow(2).sum(dim=1)
+                sumsq_meanscale[R] += a_bar.flatten(1).pow(2).mean(dim=1)
         print(f"[grid] bits={bits} stochastic done ({N_SEEDS} seeds x {R_MAX} replicas)")
 
         for R in R_LIST:
             mean_abar = sum_abar[R] / N_SEEDS
-            bias_per_image = (a_sub - mean_abar).flatten(1).norm(dim=1)
-            bias = bias_per_image.mean().item()
-            var_per_image = sumsq_scalar[R] / N_SEEDS - mean_abar.flatten(1).pow(2).sum(dim=1)
+            # bias^2 per image, on the SAME per-element-mean scale as mse_per_image.
+            bias_sq_per_image = (a_sub - mean_abar).flatten(1).pow(2).mean(dim=1)
+            bias_sq = bias_sq_per_image.mean().item()
+            # Var(X) = E[X^2] - E[X]^2, computed across the N_SEEDS independent
+            # estimates of a_bar_R (each itself an average of R iid replicas).
+            var_per_image = sumsq_meanscale[R] / N_SEEDS - mean_abar.flatten(1).pow(2).mean(dim=1)
             variance = var_per_image.clamp(min=0).mean().item()
-            biasvar_rows.append({"bits": bits, "R": R, "bias": bias, "variance": variance})
+            mse_actual = sum(mse_accum[R]) / len(mse_accum[R])
+            biasvar_rows.append({
+                "method": "stochastic", "bits": bits, "R": R,
+                "bias_sq": bias_sq, "variance": variance,
+                "mse_check": bias_sq + variance, "mse_actual": mse_actual,
+            })
 
     with open(raw_csv, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=["method", "bits", "R", "seed", "mse", "rel_error", "divergence", "accuracy"])
@@ -182,20 +218,26 @@ def replica_grid(model, a_sub, y_sub, device, raw_csv, biasvar_csv):
         writer.writerows(raw_rows)
 
     with open(biasvar_csv, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["bits", "R", "bias", "variance"])
+        writer = csv.DictWriter(f, fieldnames=["method", "bits", "R", "bias_sq", "variance", "mse_check", "mse_actual"])
         writer.writeheader()
         writer.writerows(biasvar_rows)
+
+    max_decomposition_error = max(abs(r["mse_check"] - r["mse_actual"]) for r in biasvar_rows)
+    print(f"[check] max |bias^2 + variance - actual MSE| over all rows = {max_decomposition_error:.3e} "
+          f"(should be ~0 -- confirms the bias/variance decomposition is exact, not approximate)")
 
     return raw_rows, biasvar_rows
 
 
-def build_summary_table(raw_rows, out_csv):
+def build_summary_table(raw_rows, biasvar_rows, out_csv):
     """
     The headline table: for every (bits, R), deterministic MSE, mean+/-std
     stochastic MSE (over seeds), deterministic accuracy, mean+/-std
-    stochastic accuracy, and mean honest stochastic inter-replica
-    divergence -- plus a paired significance check (stochastic vs
-    deterministic MSE, per seed) using metrics.paired_t_stat.
+    stochastic accuracy, mean honest stochastic inter-replica divergence,
+    a paired significance check (stochastic vs deterministic MSE, per
+    seed), AND the bias^2/variance decomposition for both methods -- the
+    direct evidence that deterministic error is (near) 100% bias while
+    stochastic error is (near) 100% variance.
     """
     from collections import defaultdict
     det = {}
@@ -209,6 +251,8 @@ def build_summary_table(raw_rows, out_csv):
             stoch[key]["accuracy"].append(row["accuracy"])
             stoch[key]["divergence"].append(row["divergence"])
 
+    bv = {(r["method"], r["bits"], r["R"]): r for r in biasvar_rows}
+
     out_rows = []
     for bits in BITS_LIST:
         for R in R_LIST:
@@ -219,6 +263,8 @@ def build_summary_table(raw_rows, out_csv):
             s_div_mean, _, _ = mean_std_ci95(stoch[key]["divergence"])
             diffs = [d["mse"] - m for m in stoch[key]["mse"]]  # positive => stochastic worse (higher MSE)
             t_stat, p_val = paired_t_stat(diffs)
+            det_bv = bv[("deterministic", bits, R)]
+            stoch_bv = bv[("stochastic", bits, R)]
             out_rows.append({
                 "bits": bits, "replicas": R,
                 "deterministic_mse": d["mse"], "stochastic_mse_mean": s_mse_mean, "stochastic_mse_std": s_mse_std,
@@ -226,6 +272,8 @@ def build_summary_table(raw_rows, out_csv):
                 "honest_stochastic_divergence": s_div_mean,
                 "mse_diff_det_minus_stoch": -sum(diffs) / len(diffs),
                 "p_value_stoch_vs_det_mse": p_val,
+                "deterministic_bias_sq": det_bv["bias_sq"], "deterministic_variance": det_bv["variance"],
+                "stochastic_bias_sq": stoch_bv["bias_sq"], "stochastic_variance": stoch_bv["variance"],
             })
 
     with open(out_csv, "w", newline="") as f:
@@ -269,11 +317,12 @@ def main():
         os.path.join(args.out_dir, "bias_variance.csv"),
     )
 
-    summary_rows = build_summary_table(raw_rows, os.path.join(args.out_dir, "summary_table.csv"))
-    print("\n=== Summary table (bits, replicas, det MSE, stoch MSE, det acc, stoch acc, divergence) ===")
+    summary_rows = build_summary_table(raw_rows, biasvar_rows, os.path.join(args.out_dir, "summary_table.csv"))
+    print("\n=== Summary table (bits, replicas, det MSE=bias^2, stoch MSE=bias^2+var, accuracies, divergence) ===")
     for r in summary_rows:
-        print(f"bits={r['bits']:>2} R={r['replicas']:>2}  det_mse={r['deterministic_mse']:.5f}  "
-              f"stoch_mse={r['stochastic_mse_mean']:.5f}+/-{r['stochastic_mse_std']:.5f}  "
+        print(f"bits={r['bits']:>2} R={r['replicas']:>2}  "
+              f"det_mse={r['deterministic_mse']:.5f} (bias^2={r['deterministic_bias_sq']:.5f}, var={r['deterministic_variance']:.1e})  "
+              f"stoch_mse={r['stochastic_mse_mean']:.5f} (bias^2={r['stochastic_bias_sq']:.1e}, var={r['stochastic_variance']:.5f})  "
               f"det_acc={r['deterministic_accuracy']:.4f}  "
               f"stoch_acc={r['stochastic_accuracy_mean']:.4f}+/-{r['stochastic_accuracy_std']:.4f}  "
               f"div={r['honest_stochastic_divergence']:.5f}  p={r['p_value_stoch_vs_det_mse']:.3g}")

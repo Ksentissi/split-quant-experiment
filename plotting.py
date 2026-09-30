@@ -137,16 +137,51 @@ def plot4_accuracy_vs_bits(simple_rows, out_dir):
     plt.close()
 
 
+def plot6_bias_variance_decomposition(biasvar_rows, out_dir):
+    """
+    The central proof: MSE = bias^2 + variance, for both methods.
+    Deterministic error is (numerically) 100% bias^2, constant in R.
+    Stochastic error is (numerically) ~100% variance, shrinking as 1/R,
+    with bias^2 ~ 0 at every R (as guaranteed by unbiasedness).
+    """
+    for bits in BITS_LIST:
+        det = sorted([r for r in biasvar_rows if r["method"] == "deterministic" and r["bits"] == bits], key=lambda r: r["R"])
+        stoch = sorted([r for r in biasvar_rows if r["method"] == "stochastic" and r["bits"] == bits], key=lambda r: r["R"])
+        Rs = [r["R"] for r in stoch]
+
+        eps = 1e-12
+        plt.figure(figsize=(5.5, 4.5))
+        plt.plot([r["R"] for r in det], [max(r["bias_sq"], eps) for r in det], "o-", color="tab:blue",
+                 label="Deterministic bias² (= entire MSE, constant)")
+        plt.plot(Rs, [max(r["bias_sq"], eps) for r in stoch], "^--", color="tab:orange",
+                 label="Stochastic bias² (≈ 0, as predicted)")
+        plt.plot(Rs, [max(r["variance"], eps) for r in stoch], "s-", color="tab:green",
+                 label="Stochastic variance (∝ 1/R)")
+        plt.plot(Rs, [max(r["mse_check"], eps) for r in stoch], "d:", color="black",
+                 label="Stochastic total MSE (bias²+variance)")
+
+        plt.xscale("log", base=2)
+        plt.yscale("log")
+        plt.xlabel("Number of replicas R")
+        plt.ylabel("Squared-error contribution")
+        plt.title(f"Bias²/variance decomposition — {bits}-bit quantization")
+        plt.legend(fontsize=8)
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, f"plot6_bias_variance_decomposition_bits{bits}.png"), dpi=150)
+        plt.close()
+
+
 def plot5_variance_loglog(biasvar_rows, out_dir):
+    stoch_rows = [r for r in biasvar_rows if r["method"] == "stochastic"]
     plt.figure(figsize=(5.5, 4.5))
     for bits in BITS_LIST:
-        rows = sorted([r for r in biasvar_rows if r["bits"] == bits], key=lambda r: r["R"])
+        rows = sorted([r for r in stoch_rows if r["bits"] == bits], key=lambda r: r["R"])
         Rs = [r["R"] for r in rows]
         var = [max(r["variance"], 1e-12) for r in rows]
         plt.plot(Rs, var, "o-", label=f"{bits} bits")
 
     # Reference 1/R slope, anchored at R=1 of the 8-bit curve.
-    ref_rows = sorted([r for r in biasvar_rows if r["bits"] == 8], key=lambda r: r["R"])
+    ref_rows = sorted([r for r in stoch_rows if r["bits"] == 8], key=lambda r: r["R"])
     anchor = max(ref_rows[0]["variance"], 1e-12)
     ref_R = [r["R"] for r in ref_rows]
     ref_y = [anchor / R for R in ref_R]
@@ -177,6 +212,7 @@ def main():
     plot3_divergence_vs_bits(raw_rows, args.results_dir)
     plot4_accuracy_vs_bits(simple_rows, args.results_dir)
     plot5_variance_loglog(biasvar_rows, args.results_dir)
+    plot6_bias_variance_decomposition(biasvar_rows, args.results_dir)
     print(f"Plots written to {args.results_dir}/")
 
 

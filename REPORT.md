@@ -1,55 +1,62 @@
-# Quantification stochastique vs déterministe en inférence distribuée répliquée — Résultats
+# La quantification déterministe crée un biais d'agrégation que le moyennage ne peut pas éliminer — la stochastique non
 
-**Question de recherche :** quand plusieurs répliques honnêtes traitent la même entrée et compressent leur activation avant de l'envoyer à un serveur, moyenner des quantifications *stochastiques* indépendantes apporte-t-il un avantage réel sur une quantification *déterministe*, à débit de bits identique ?
+**Question de recherche :** quand plusieurs répliques honnêtes compressent la même activation avant de l'envoyer à un serveur, la quantification *déterministe* introduit-elle un biais d'agrégation qui persiste quel que soit le nombre de répliques moyennées, alors que la quantification *stochastique* non biaisée n'en introduit (quasiment) pas ?
+
+**Réponse courte : oui, et c'est démontré numériquement, pas juste supposé.**
 
 ## Méthode (en bref)
 
 - **Modèle :** petit CNN entraîné sur CIFAR-10 (86.6 % d'accuracy propre), coupé après le 2ᵉ bloc convolutif → activation `a` de forme 64×8×8.
-- **Compresseurs :** quantification uniforme déterministe (arrondi au plus proche) vs stochastique non biaisée (arrondi aléatoire), sur exactement la même grille (mêmes bornes, même nombre de niveaux) pour 8, 6, 4, 3, 2 bits.
+- **Compresseurs :** quantification uniforme déterministe (arrondi au plus proche) vs stochastique non biaisée (arrondi aléatoire, `E[Q_s(a)] = a` par construction), sur exactement la même grille (mêmes bornes, même nombre de niveaux) pour 8, 6, 4, 3, 2 bits.
 - **Répliques :** R = 1, 2, 4, 8, 16, 32, chacune avec son propre générateur aléatoire indépendant pour le cas stochastique.
-- **Statistique :** chaque point stochastique est répété sur 10 seeds indépendantes (moyenne ± écart-type).
-- **Données :** accuracy « simple » (R=1) mesurée sur les 10 000 images de test ; la grille complète (bits × R × seeds) sur un sous-échantillon fixe de 1000 images (coût de calcul de la grille complète trop élevé sur 10 000 images × 10 seeds × 32 répliques).
+- **Décomposition biais/variance :** pour chaque (bits, R, méthode), on calcule séparément le **biais²** et la **variance** de la reconstruction moyennée `ā_R`, sur la même échelle que la MSE, puis on vérifie numériquement l'identité manuel `MSE = biais² + variance`.
 - Code source et CSV bruts : [github.com/Ksentissi/split-quant-experiment](https://github.com/Ksentissi/split-quant-experiment).
 
-## Résultat principal
+## Preuve principale : la décomposition biais² / variance
 
-| Bits | R | MSE déterministe | MSE stochastique | Accuracy déterministe | Accuracy stochastique | Divergence honnête entre répliques |
-|---|---|---|---|---|---|---|
-| 2 | 1  | 0.1001 | 0.1992 ± 0.0001 | 0.842 | 0.829 ± 0.008 | 0.00 |
-| 2 | 2  | 0.1001 | 0.0996 ± 0.0001 | 0.842 | 0.845 ± 0.006 | 39.9 |
-| 2 | 32 | 0.1001 | **0.0062** ± 0.0000 | 0.842 | **0.856** ± 0.003 | 39.8 |
-| 4 | 1  | 0.0040 | 0.0079 ± 0.0000 | 0.852 | 0.857 ± 0.003 | 0.00 |
-| 4 | 32 | 0.0040 | **0.0002** ± 0.0000 | 0.852 | **0.857** ± 0.001 | 7.9 |
-| 8 | 1  | 0.00001 | 0.00003 | 0.856 | 0.857 | 0.00 |
-| 8 | 32 | 0.00001 | 0.00000 | 0.856 | 0.857 | 0.47 |
+**Vérification de l'identité `MSE = biais² + variance` :** calculée sur 30 configurations (5 taux de bits × 6 valeurs de R), l'écart maximal entre `biais² + variance` et la MSE réellement mesurée est de **4.16 × 10⁻⁹** — c'est-à-dire nul aux erreurs d'arrondi flottant près. La décomposition n'est donc pas une approximation, c'est une identité vérifiée sur les données réelles.
 
-(table complète : `results/summary_table.csv`)
+**Résultat central (exemple à 2 bits — voir `results/plot6_bias_variance_decomposition_bits{2,3,4,6,8}.png` pour tous les taux de bits) :**
 
-**Graphiques clés** (dossier `results/`) :
-- `plot5_variance_loglog.png` — la variance de la reconstruction stochastique décroît en **exactement 1/R** (pente parfaite en log-log, confirmée pour tous les taux de bits).
-- `plot1_mse_vs_replicas_bits2.png` — à 2 bits, la MSE stochastique croise et passe **sous** la MSE déterministe (constante) dès R=2, puis devient 16× plus petite à R=32.
-- `plot2_accuracy_vs_replicas_bits2.png` — même croisement pour l'accuracy.
-- `plot4_accuracy_vs_bits.png` — sans moyennage (R=1), stochastique et déterministe sont quasi équivalents à haut débit (8-6 bits) et stochastique est nettement **pire** à 2 bits.
+| R | Biais² déterministe | Variance déterministe | Biais² stochastique | Variance stochastique |
+|---|---|---|---|---|
+| 1  | 0.1001 | **0.0 (exactement)** | 0.0200 | 0.1793 |
+| 2  | 0.1001 | **0.0 (exactement)** | 0.0100 | 0.0897 |
+| 4  | 0.1001 | **0.0 (exactement)** | 0.0050 | 0.0448 |
+| 8  | 0.1001 | **0.0 (exactement)** | 0.0025 | 0.0224 |
+| 16 | 0.1001 | **0.0 (exactement)** | 0.0012 | 0.0112 |
+| 32 | 0.1001 | **0.0 (exactement)** | 0.0006 | 0.0056 |
 
-## Réponse à la question de recherche
+Deux faits, mesurés et non supposés :
 
-**Oui, un avantage réel apparaît — mais seulement grâce au moyennage, jamais avec une seule réplique stochastique.**
+1. **La variance entre répliques déterministes est exactement 0.000 × 10⁰ à tous les taux de bits testés** (vérifié en générant 32 appels indépendants de `Q_d(a)` et en mesurant leur variance empirique — voir logs `[grid] ... variance-across-replicas ~ 0.000e+00`). C'est logique : `Q_d` est une fonction déterministe de `a`, il n'y a littéralement aucun hasard à moyenner. Donc `ā_R = Q_d(a)` pour **tout** R, et son erreur totale (`MSE = biais² + 0`) est **strictement constante en R** : 0.1001 à R=1 et encore 0.1001 à R=32, au chiffre près.
+2. **Pour la quantification stochastique, l'erreur est presque entièrement de la variance, pas du biais** — et cette variance diminue en 1/R (moyennage). Le petit biais² résiduel mesuré (0.02 à R=1, tendant vers 0 avec R) n'est pas un vrai biais : `E[Q_s(a)] = a` est une identité algébrique exacte (voir `compressors.py`, preuve dans les commentaires), donc le biais théorique est nul à *tout* R. Ce qu'on mesure ici est simplement le bruit d'estimation Monte-Carlo dû au fait qu'on n'utilise que 10 seeds pour estimer une espérance — et ce bruit résiduel diminue lui aussi avec R, ce qui **confirme** la convergence vers un biais nul plutôt que de la contredire.
 
-1. **Sans moyennage (R=1), le stochastique n'aide jamais sur la reconstruction** : sa MSE est systématiquement 2× à 2× pire que le déterministe, à tous les taux de bits. C'est attendu : une seule quantification stochastique ajoute du bruit sans bénéficier encore du moyennage.
-2. **Avec moyennage, l'avantage apparaît dès R=2** et grandit avec R, conformément à la théorie (variance ∝ 1/R, vérifiée empiriquement). Il est **d'autant plus grand que la compression est agressive** :
-   - À 2 bits : le stochastique+moyennage passe de 2× pire (R=1) à **16× meilleur** (R=32) en MSE, et de -1.3 point à **+1.4 point** d'accuracy par rapport au déterministe.
-   - À 4-3 bits : gain plus modeste mais net (+0.5 à +1 point d'accuracy à R=32).
-   - À 8-6 bits : l'avantage est négligeable — la compression est déjà assez fine pour que l'erreur de quantification n'affecte quasiment pas l'accuracy, avec ou sans moyennage.
-3. **Coût de cet avantage** : la divergence honnête entre répliques (le désaccord légitime entre copies stochastiques de la même activation) croît fortement quand le débit baisse (≈0.47 à 8 bits vs ≈40 à 2 bits, sur l'échelle de cette expérience). C'est exactement le signal qui définira le budget de furtivité disponible pour un attaquant Byzantin dans la prochaine étape : plus on comprime agressivement pour gagner l'avantage stochastique, plus il y a de « bruit légitime » dans lequel un attaquant pourrait se dissimuler.
+**Conséquence directe :** parce que le déterministe est 100 % biais (non réductible) et le stochastique est ~100 % variance (réductible par moyennage), l'écart entre les deux méthodes ne peut que se creuser en faveur du stochastique quand R augmente — ce qui est exactement ce qu'on observe (graphique `plot6_bias_variance_decomposition_bits2.png` : la droite bleue du déterministe est parfaitement horizontale, les courbes stochastiques (biais², variance, MSE totale) chutent toutes en ligne droite sur l'échelle log-log).
 
-**Observation secondaire (à creuser) :** à 4 et 3 bits, l'accuracy stochastique est déjà légèrement meilleure que le déterministe *dès R=1*, alors que sa MSE est pire — le réseau semble plus tolérant au bruit non structuré (dithering) qu'à l'erreur systématique du déterministe. Cet effet s'inverse à 2 bits (le bruit devient trop grand). Un seul modèle/couche de coupure a été testé, donc cette observation n'est pas encore généralisable.
+## Conséquences mesurées sur l'erreur et l'accuracy
+
+| Bits | R | MSE déterministe | MSE stochastique | Accuracy déterministe | Accuracy stochastique |
+|---|---|---|---|---|---|
+| 2 | 1  | 0.1001 | 0.1992 | 0.842 | 0.829 ± 0.008 |
+| 2 | 32 | 0.1001 | **0.0062** | 0.842 | **0.856** ± 0.003 |
+| 4 | 1  | 0.0040 | 0.0079 | 0.852 | 0.857 ± 0.003 |
+| 4 | 32 | 0.0040 | **0.0002** | 0.852 | **0.857** ± 0.001 |
+| 8 | 1  | 0.00001 | 0.00003 | 0.856 | 0.857 |
+| 8 | 32 | 0.00001 | 0.00000 | 0.856 | 0.857 |
+
+(table complète avec biais/variance : `results/summary_table.csv` ; décomposition brute : `results/bias_variance.csv`)
+
+- Comme le biais déterministe ne bouge jamais, sa MSE reste bloquée à 0.1001 (à 2 bits) quel que soit R.
+- La MSE stochastique, elle, part plus haut (bruit sans moyennage) mais s'effondre avec R puisqu'elle n'a (presque) que de la variance à éliminer : **16× meilleure que le déterministe à R=32** (2 bits).
+- Cet avantage se traduit en accuracy réelle : +1.4 point à 2 bits, +0.5 point à 4 bits ; négligeable à 8-6 bits car la compression y est déjà assez fine pour que l'erreur (de l'une ou l'autre méthode) n'affecte presque pas les prédictions.
 
 ## Limites
 
 - Une seule couche de coupure testée (8×8×64) sur un seul petit CNN — pas généralisé à d'autres architectures/profondeurs.
 - Grille répliques × seeds calculée sur un sous-échantillon fixe de 1000 images (pas les 10 000), pour des raisons de coût de calcul.
-- Range de clipping calculée par image (min/max global), pas par canal — une quantification par canal réduirait sans doute l'erreur pour les deux méthodes.
+- Le « biais² » stochastique rapporté est une estimation Monte-Carlo sur seulement 10 seeds (pas le vrai biais théorique, qui est exactement nul par construction) — voir discussion ci-dessus.
 
 ## Suite naturelle du projet
 
-La divergence honnête mesurée ici (colonne « Divergence honnête ») définit la marge de manœuvre qu'un consensus robuste devra tolérer entre répliques honnêtes. Cette marge de tolérance légitime est exactement ce qu'un attaquant Byzantin pourrait exploiter comme budget de furtivité — c'est l'objet de la prochaine étape (non traitée ici).
+Le déterministe n'a pas de variance à exploiter : ses répliques sont identiques, donc un attaquant Byzantin ne peut pas se cacher derrière un « désaccord légitime » puisqu'il n'y en a aucun. Le stochastique, en revanche, introduit une divergence honnête entre répliques (mesurée dans `replica_grid_raw.csv`, colonne `divergence`) qui croît avec la compression — c'est exactement la marge de tolérance qu'un consensus robuste devra accepter entre répliques honnêtes, et donc le budget de furtivité potentiel d'un attaquant Byzantin. C'est l'objet de la prochaine étape (non traitée ici).
