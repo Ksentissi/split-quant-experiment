@@ -1,4 +1,4 @@
-# Deterministic Quantization Creates an Aggregation Bias That Averaging Cannot Remove — Stochastic Quantization Does Not
+# Deterministic Quantization Creates an Aggregation Bias That Averaging Cannot Remove, Stochastic Quantization Does Not
 
 **Research question:** when several honest replicas compress the same activation before sending it to a server, does *deterministic* quantization introduce an aggregation bias that persists no matter how many replicas are averaged, while *unbiased stochastic* quantization introduces (almost) none?
 
@@ -32,7 +32,7 @@ Two facts, measured rather than assumed:
 1. **The variance across deterministic replicas is exactly 0.000 × 10⁰ at every bit rate tested** (verified by generating 32 independent calls of `Q_d(a)` and measuring their empirical variance — see logs `[grid] ... variance-across-replicas ~ 0.000e+00`). This makes sense: `Q_d` is a deterministic function of `a`, so there is literally no randomness to average out. Hence `ā_R = Q_d(a)` for **every** R, and its total error (`MSE = bias² + 0`) is **strictly constant in R**: 0.1001 at R=1, still 0.1001 at R=32, to the digit.
 2. **For stochastic quantization, the error is almost entirely variance, not bias** — and this variance decreases as 1/R with averaging. The small residual bias² measured (0.02 at R=1, shrinking toward 0 as R grows) is not a true bias: `E[Q_s(a)] = a` is an exact algebraic identity (see `compressors.py`, proof in the comments), so the theoretical bias is zero at *any* R. What is measured here is simply the Monte Carlo estimation noise from using only 10 seeds to estimate an expectation — and this residual noise also shrinks with R, which **confirms** convergence toward zero bias rather than contradicting it.
 
-**Direct consequence:** because deterministic error is 100% (non-removable) bias and stochastic error is ~100% (removable) variance, the gap between the two methods can only widen in favor of stochastic quantization as R increases — exactly what is observed (`plot6_bias_variance_decomposition_bits2.png`: the deterministic blue line is perfectly flat; the stochastic curves — bias², variance, total MSE — all fall in a straight line on the log-log scale).
+**Direct consequence:** because deterministic error is 100% (non-removable) bias and stochastic error is ~100% (removable) variance, the gap between the two methods can only widen in favor of stochastic quantization as R increases exactly what is observed (`plot6_bias_variance_decomposition_bits2.png`: the deterministic blue line is perfectly flat; the stochastic curves bias², variance, total MSE all fall in a straight line on the log-log scale).
 
 ## Measured consequences on error and accuracy
 
@@ -53,9 +53,9 @@ Two facts, measured rather than assumed:
 
 ## Limitations
 
-- Only one cut layer tested (8×8×64) on one small CNN — not yet generalized to other architectures/depths.
+- Only one cut layer tested (8×8×64) on one small CNN not yet generalized to other architectures/depths.
 - The replica × seed grid was computed on a fixed subset of 1,000 images (not the full 10,000), for compute-cost reasons.
-- The reported stochastic "bias²" is a Monte Carlo estimate over only 10 seeds (not the true theoretical bias, which is exactly zero by construction) — see discussion above.
+- The reported stochastic "bias²" is a Monte Carlo estimate over only 10 seeds (not the true theoretical bias, which is exactly zero by construction) see discussion above.
 
 ## Natural next step for the project
 
